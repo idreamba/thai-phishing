@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from datetime import datetime, timezone
 
 import pandas as pd
 from datasets import Dataset
@@ -17,6 +18,56 @@ from transformers import (
 
 
 load_dotenv()
+
+
+def _write_report(
+    output_dir: Path,
+    args: argparse.Namespace,
+    train_df: pd.DataFrame,
+    eval_df: pd.DataFrame,
+    labels: list[str],
+    train_metrics: dict,
+    eval_metrics: dict,
+) -> None:
+    label_counts = train_df["label"].value_counts().sort_index()
+    eval_label_counts = eval_df["label"].value_counts().sort_index()
+    utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    lines = [
+        "# Training Report",
+        "",
+        f"- Generated at: {utc_now}",
+        f"- Base model: `{args.base_model}`",
+        f"- Input CSV: `{args.csv}`",
+        f"- Output dir: `{args.output_dir}`",
+        f"- Epochs: {args.epochs}",
+        "",
+        "## Dataset",
+        "",
+        f"- Total rows: {len(train_df) + len(eval_df)}",
+        f"- Train rows: {len(train_df)}",
+        f"- Eval rows: {len(eval_df)}",
+        f"- Labels: {', '.join(labels)}",
+        "",
+        "### Train Label Distribution",
+        "",
+    ]
+
+    for label in labels:
+        lines.append(f"- {label}: {int(label_counts.get(label, 0))}")
+
+    lines.extend(["", "### Eval Label Distribution", ""])
+    for label in labels:
+        lines.append(f"- {label}: {int(eval_label_counts.get(label, 0))}")
+
+    lines.extend(["", "## Metrics", ""])
+    for key in sorted(train_metrics.keys()):
+        lines.append(f"- {key}: {train_metrics[key]}")
+    for key in sorted(eval_metrics.keys()):
+        lines.append(f"- {key}: {eval_metrics[key]}")
+
+    report_path = output_dir / "report.md"
+    report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main() -> None:
@@ -102,17 +153,29 @@ def main() -> None:
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
     )
 
-    trainer.train()
+    train_result = trainer.train()
+    eval_metrics = trainer.evaluate()
 
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    trainer.save_model(args.output_dir)
-    tokenizer.save_pretrained(args.output_dir)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    trainer.save_model(output_dir)
+    tokenizer.save_pretrained(output_dir)
 
-    labels_path = Path(args.output_dir) / "labels.txt"
+    labels_path = output_dir / "labels.txt"
     labels_path.write_text("\n".join(labels), encoding="utf-8")
+    _write_report(
+        output_dir=output_dir,
+        args=args,
+        train_df=train_df,
+        eval_df=eval_df,
+        labels=labels,
+        train_metrics=train_result.metrics,
+        eval_metrics=eval_metrics,
+    )
 
     print(f"Saved fine-tuned model to: {args.output_dir}")
     print(f"Labels: {labels}")
+    print(f"Training report saved to: {output_dir / 'REPORTS.md'}")
 
 
 if __name__ == "__main__":
