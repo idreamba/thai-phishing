@@ -6,3 +6,4 @@ models/*
 !models/.gitkeep
 outputs/
 logs/
+.DS_Store
